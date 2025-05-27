@@ -1,3 +1,4 @@
+
 export interface GameLocationNode {
   id: string;
   name: string;
@@ -429,4 +430,18 @@ export interface DetailDisplayControllerProps {
   onPokemonNameClickForEvolution: (pokemonNameOrId: string | number) => void; // Can take name or ID
   onAbilityNameClick: (abilityName: string) => void; // abilityName is rawName
   onMoveNameClick: (moveName: string, rawMoveName: string) => void; // Pass raw name for API lookup
+}
+
+// Props for NavigatorDisplay
+export interface NavigatorDisplayProps {
+  initialPromptValue: string;
+  onPromptSubmit: (prompt: string) => void;
+  isLoading: boolean;
+  apiResponse: string | null;
+  apiError: string | null;
+  onReset: () => void;
+  apiKeyMissing: boolean;
+  onPokemonNameClick: (pokemonName: string) => void;
+  onLocationNameClick: (location: GameLocationNode) => void;
+  gameLocations: GameLocationNode[];
 }

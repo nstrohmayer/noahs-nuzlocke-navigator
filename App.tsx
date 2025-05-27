@@ -3,15 +3,15 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { 
   GameLocationNode, DetailedLocationInfo, TeamMember, 
   PokemonDetailData, CaughtStatusMap, AddTeamMemberData, PokemonMoveInfo,
-  AbilityDetailData, FullMoveDetailData // Added types
+  AbilityDetailData, FullMoveDetailData
 } from './types';
 import { ULTRA_MOON_PROGRESSION } from './constants';
 import { GameProgressionTree } from './components/GameProgressionTree';
 import { LocationDetailsDisplay } from './components/LocationDetailsDisplay';
 import { TeamManager } from './components/TeamManager';
-// import { PokemonDetailBar } from './components/PokemonDetailBar'; // Replaced by DetailDisplayController
-import { DetailDisplayController } from './components/DetailDisplayController'; // New component
-import { fetchLocationDetailsFromGemini } from './services/geminiService';
+import { DetailDisplayController } from './components/DetailDisplayController';
+import { NavigatorDisplay } from './components/NavigatorDisplay'; // New Navigator component
+import { fetchLocationDetailsFromGemini, fetchNavigatorGuidanceFromGemini } from './services/geminiService'; // Added navigator service
 import { fetchPokemonDetails, fetchAbilityDetails, fetchFullMoveDetails } from './services/pokeApiService';
 
 
@@ -60,10 +60,21 @@ const App: React.FC = () => {
   const [caughtPokemon, setCaughtPokemon] = useState<CaughtStatusMap>({});
   const [selectedMoveForAssignment, setSelectedMoveForAssignment] = useState<{ pokemonId: number; moveName: string; moveDetails: PokemonMoveInfo } | null>(null);
 
+  // --- Navigator State ---
+  const [activeMainPanel, setActiveMainPanel] = useState<'location' | 'navigator'>('location');
+  const [navigatorUserPrompt, setNavigatorUserPrompt] = useState<string>("");
+  const [navigatorGeminiResponse, setNavigatorGeminiResponse] = useState<string | null>(null);
+  const [isLoadingNavigatorQuery, setIsLoadingNavigatorQuery] = useState<boolean>(false);
+  const [navigatorError, setNavigatorError] = useState<string | null>(null);
+  // --- End Navigator State ---
+
+
   useEffect(() => {
     if (!process.env.API_KEY) {
       setApiKeyMissing(true);
-      setLocationError("API Key is missing. Please set the API_KEY environment variable.");
+      const commonError = "API Key is missing. Please set the API_KEY environment variable.";
+      setLocationError(commonError);
+      setNavigatorError(commonError + " The Navigator feature also requires this key.");
     }
     try {
       const storedCaughtPokemon = localStorage.getItem(CAUGHT_POKEMON_STORAGE_KEY);
@@ -161,13 +172,14 @@ const App: React.FC = () => {
     setSelectedLocation(location);
     setLocationDetails(null); 
     setLocationError(null);
+    setActiveMainPanel('location'); // Switch to location view when a location is selected
   }, []);
 
   useEffect(() => {
     // ... (level cap logic remains the same)
     let nextCap: number | null = null;
     let battleName: string | null = null;
-    let battleLoc: string | null = null; // Renamed to avoid conflict
+    let battleLoc: string | null = null; 
     let battlePokemonCount: number | null = null;
 
     if (selectedLocation) {
@@ -187,10 +199,10 @@ const App: React.FC = () => {
     }
     setLevelCap(nextCap);
     setNextBattleName(battleName);
-    setNextBattleLocation(battleLoc); // Use renamed variable
+    setNextBattleLocation(battleLoc);
     setNextBattlePokemonCount(battlePokemonCount);
 
-    if (selectedLocation && !apiKeyMissing) {
+    if (selectedLocation && !apiKeyMissing && activeMainPanel === 'location') {
       const fetchAllDetails = async () => {
         setIsLoadingLocation(true);
         setLocationError(null);
@@ -206,11 +218,11 @@ const App: React.FC = () => {
         }
       };
       fetchAllDetails();
-    } else if (!selectedLocation) {
+    } else if (!selectedLocation && activeMainPanel === 'location') {
         setLocationDetails(null);
         setLocationError(null);
     }
-  }, [selectedLocation, apiKeyMissing]);
+  }, [selectedLocation, apiKeyMissing, activeMainPanel]);
 
   const removeTeamMember = (id: string) => setTeam(prevTeam => prevTeam.filter(member => member.id !== id));
   const handleUpdateTeamMemberNickname = useCallback((memberId: string, nickname: string) => setTeam(prevTeam => prevTeam.map(m => m.id === memberId ? { ...m, nickname } : m)), []);
@@ -249,7 +261,7 @@ const App: React.FC = () => {
   const handleAbilityNameClick = useCallback(async (abilityName: string) => {
     setIsLoadingDetail(true);
     setDetailError(null);
-    setPokemonContextForDetailView(selectedPokemonDetailData); // Cache current Pokemon for "Back"
+    setPokemonContextForDetailView(selectedPokemonDetailData); 
     setSelectedAbilityDetailData(null);
     try {
       const details = await fetchAbilityDetails(abilityName);
@@ -258,20 +270,19 @@ const App: React.FC = () => {
     } catch (err) {
       console.error(`Error fetching ability details for ${abilityName}:`, err);
       setDetailError(err instanceof Error ? err.message : `An unknown error occurred.`);
-      // Potentially revert to Pokemon view or close
       setActiveBottomBarView(pokemonContextForDetailView ? 'pokemon' : null);
     } finally {
       setIsLoadingDetail(false);
     }
-  }, [selectedPokemonDetailData]);
+  }, [selectedPokemonDetailData, pokemonContextForDetailView]);
 
   const handleMoveNameClick = useCallback(async (moveDisplayName: string, rawMoveName: string) => {
     setIsLoadingDetail(true);
     setDetailError(null);
-    setPokemonContextForDetailView(selectedPokemonDetailData); // Cache current Pokemon
+    setPokemonContextForDetailView(selectedPokemonDetailData); 
     setSelectedMoveDetailData(null);
     try {
-      const details = await fetchFullMoveDetails(rawMoveName); // Use raw name for API
+      const details = await fetchFullMoveDetails(rawMoveName); 
       setSelectedMoveDetailData(details);
       setActiveBottomBarView('move');
     } catch (err) {
@@ -281,7 +292,7 @@ const App: React.FC = () => {
     } finally {
       setIsLoadingDetail(false);
     }
-  }, [selectedPokemonDetailData]);
+  }, [selectedPokemonDetailData, pokemonContextForDetailView]);
 
   const handleBackToPokemonDetail = useCallback(() => {
     if (pokemonContextForDetailView) {
@@ -317,22 +328,73 @@ const App: React.FC = () => {
     ? selectedMoveForAssignment.moveName
     : null;
 
-  if (apiKeyMissing) {
-    return (
+  // --- Navigator Handlers ---
+  const switchToNavigatorPanel = () => {
+    setActiveMainPanel('navigator');
+    // Optionally clear selectedLocation or locationDetails if they shouldn't persist when Navigator is active
+    // setSelectedLocation(null); 
+    // setLocationDetails(null);
+  };
+
+  const handleNavigatorSubmit = async (prompt: string) => {
+    if (apiKeyMissing) {
+      setNavigatorError("API Key is missing. Navigator cannot function.");
+      return;
+    }
+    setIsLoadingNavigatorQuery(true);
+    setNavigatorError(null);
+    setNavigatorGeminiResponse(null);
+    try {
+      const response = await fetchNavigatorGuidanceFromGemini(prompt);
+      setNavigatorGeminiResponse(response);
+    } catch (err) {
+      console.error("Error fetching navigator guidance:", err);
+      setNavigatorError(err instanceof Error ? err.message : "An unknown error occurred.");
+    } finally {
+      setIsLoadingNavigatorQuery(false);
+    }
+  };
+
+  const handleNavigatorReset = () => {
+    setNavigatorUserPrompt("");
+    setNavigatorGeminiResponse(null);
+    setNavigatorError(null);
+    setIsLoadingNavigatorQuery(false);
+  };
+  // --- End Navigator Handlers ---
+
+  if (apiKeyMissing && !navigatorError && !locationError) { // Initial check if errors not yet set by useEffect
+     const commonError = "API Key is missing. Please set the API_KEY environment variable.";
+     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-900 p-4">
         <div className="bg-slate-800 p-8 rounded-lg shadow-xl text-center">
           <h1 className="text-3xl font-bold text-red-500 mb-4">Configuration Error</h1>
-          <p className="text-slate-300 text-lg">{locationError}</p>
+          <p className="text-slate-300 text-lg">{commonError}</p>
           <p className="text-slate-400 mt-4">This application requires a Gemini API key to function. Please ensure the <code className="bg-slate-700 px-1 rounded">API_KEY</code> environment variable is correctly set up in your deployment environment.</p>
         </div>
       </div>
     );
   }
 
+
   return (
     <div className="flex flex-col md:flex-row min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-gray-900 text-slate-100 relative">
       <aside className="w-full md:w-1/4 bg-slate-800/50 p-4 md:p-6 shadow-lg overflow-y-auto md:max-h-screen border-r border-slate-700">
-        <h2 className="text-2xl font-bold mb-6 text-sky-400 tracking-tight">Game Progression</h2>
+        <h2 className="text-2xl font-bold mb-3 text-sky-400 tracking-tight">Game Progression</h2>
+        <button
+            onClick={switchToNavigatorPanel}
+            className={`w-full text-left px-4 py-3 mb-4 rounded-lg transition-all duration-200 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-purple-500
+              ${activeMainPanel === 'navigator'
+                ? 'bg-purple-600 text-white shadow-lg ring-2 ring-purple-400'
+                : 'bg-slate-700 hover:bg-slate-600 text-slate-200 hover:text-white'
+              }
+            `}
+          >
+            <div className="flex items-center">
+              <span className={`mr-3 h-2.5 w-2.5 rounded-full ${activeMainPanel === 'navigator' ? 'bg-white' : 'bg-purple-400'}`}></span>
+              <span className="font-medium">Nuzlocke Navigator</span>
+            </div>
+          </button>
         <GameProgressionTree
           locations={ULTRA_MOON_PROGRESSION}
           selectedLocationId={selectedLocation?.id || null}
@@ -341,44 +403,62 @@ const App: React.FC = () => {
       </aside>
 
       <main className="flex-1 p-4 md:p-8 overflow-y-auto md:max-h-screen">
-        {selectedLocation ? (
+        {activeMainPanel === 'location' && (
           <>
-            <h1 className="text-4xl font-extrabold mb-2 text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-blue-500">
-              {selectedLocation.name}
-            </h1>
-            {isLoadingLocation && (
-              <div className="flex items-center justify-center h-64">
-                <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-sky-500"></div>
-                <p className="ml-4 text-xl text-slate-300">Consulting the Pokedex Oracle...</p>
-              </div>
-            )}
-            {locationError && !isLoadingLocation && (
-                <div className="bg-red-800/30 border border-red-700 text-red-300 p-4 rounded-lg shadow-md">
-                    <p className="font-semibold">Error:</p>
-                    <p>{locationError}</p>
-                </div>
-            )}
-            {locationDetails && !isLoadingLocation && !locationError && (
-              <LocationDetailsDisplay 
-                details={locationDetails} 
-                IconPokeball={IconPokeball}
-                IconTrainer={IconTrainer}
-                IconItem={IconItem}
-                IconBattle={IconBattle}
-                onPokemonNameClick={handleOpenPokemonDetail} // Updated to use general detail opener
-              />
-            )}
-             {!locationDetails && !isLoadingLocation && !locationError && !apiKeyMissing && (
+            {selectedLocation ? (
+              <>
+                <h1 className="text-4xl font-extrabold mb-2 text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-blue-500">
+                  {selectedLocation.name}
+                </h1>
+                {isLoadingLocation && (
+                  <div className="flex items-center justify-center h-64">
+                    <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-sky-500"></div>
+                    <p className="ml-4 text-xl text-slate-300">Consulting the Pokedex Oracle...</p>
+                  </div>
+                )}
+                {locationError && !isLoadingLocation && (
+                    <div className="bg-red-800/30 border border-red-700 text-red-300 p-4 rounded-lg shadow-md">
+                        <p className="font-semibold">Error:</p>
+                        <p>{locationError}</p>
+                    </div>
+                )}
+                {locationDetails && !isLoadingLocation && !locationError && (
+                  <LocationDetailsDisplay 
+                    details={locationDetails} 
+                    IconPokeball={IconPokeball}
+                    IconTrainer={IconTrainer}
+                    IconItem={IconItem}
+                    IconBattle={IconBattle}
+                    onPokemonNameClick={handleOpenPokemonDetail}
+                  />
+                )}
+                 {!locationDetails && !isLoadingLocation && !locationError && !apiKeyMissing && (
+                  <div className="text-center py-10 text-slate-400">
+                    <p className="text-xl">Select a location to see details or waiting for data...</p>
+                  </div>
+                )}
+              </>
+            ) : (
               <div className="text-center py-10 text-slate-400">
-                <p className="text-xl">Select a location to see details or waiting for data...</p>
+                <p className="text-2xl font-semibold">Welcome to the Nuzlocke Navigator!</p>
+                <p className="mt-2">Select a location from the Game Progression panel or use the Nuzlocke Navigator tool.</p>
               </div>
             )}
           </>
-        ) : (
-          <div className="text-center py-10 text-slate-400">
-            <p className="text-2xl font-semibold">Welcome to the Nuzlocke Navigator!</p>
-            <p className="mt-2">Select a location from the Game Progression panel to begin.</p>
-          </div>
+        )}
+        {activeMainPanel === 'navigator' && (
+          <NavigatorDisplay
+            initialPromptValue={navigatorUserPrompt}
+            onPromptSubmit={handleNavigatorSubmit}
+            isLoading={isLoadingNavigatorQuery}
+            apiResponse={navigatorGeminiResponse}
+            apiError={navigatorError}
+            onReset={handleNavigatorReset}
+            apiKeyMissing={apiKeyMissing}
+            onPokemonNameClick={handleOpenPokemonDetail}
+            onLocationNameClick={handleSelectLocation}
+            gameLocations={ULTRA_MOON_PROGRESSION}
+          />
         )}
       </main>
 
@@ -411,13 +491,11 @@ const App: React.FC = () => {
           onClose={handleCloseBottomBar}
           onBackToPokemon={pokemonContextForDetailView ? handleBackToPokemonDetail : undefined}
           pokemonContextForDetailViewName={pokemonContextForDetailView?.name}
-          // Props for PokemonDetailBar part
           isCaught={!!(selectedPokemonDetailData && caughtPokemon[selectedPokemonDetailData.id.toString()])}
           onToggleCaught={handleToggleCaughtStatus}
           onAddToTeam={handleAddPokemonToTeamFromDetail}
           onStageMove={handleStageMove}
           stagedMoveNameForThisPokemon={stagedMoveNameForCurrentPokemon}
-          // Callbacks for navigation
           onPokemonNameClickForEvolution={handleOpenPokemonDetail}
           onAbilityNameClick={handleAbilityNameClick}
           onMoveNameClick={handleMoveNameClick}

@@ -5,6 +5,7 @@ import { GEMINI_MODEL_NAME } from '../constants';
 
 let ai: GoogleGenAI | null = null;
 const CACHE_PREFIX_GEMINI = "gemini_cache_";
+const CACHE_PREFIX_NAVIGATOR = "gemini_navigator_cache_"; // Cache for navigator
 
 const getGoogleGenAI = (): GoogleGenAI => {
   if (!ai) {
@@ -20,7 +21,6 @@ export const fetchLocationDetailsFromGemini = async (locationName: string): Prom
   const genAI = getGoogleGenAI();
   const cacheKey = `${CACHE_PREFIX_GEMINI}${locationName.toLowerCase().replace(/\s+/g, '_')}`;
 
-  // Try to get from cache first
   try {
     const cachedData = localStorage.getItem(cacheKey);
     if (cachedData) {
@@ -174,7 +174,6 @@ export const fetchLocationDetailsFromGemini = async (locationName: string): Prom
       staticEncounters: parsedData.staticEncounters || [],
     };
 
-    // Cache the processed result
     try {
       localStorage.setItem(cacheKey, JSON.stringify(processedDetails));
       console.log(`Gemini data for "${locationName}" cached.`);
@@ -194,6 +193,95 @@ export const fetchLocationDetailsFromGemini = async (locationName: string): Prom
         errorMessage = error.message.startsWith("AI response") || error.message.startsWith("AI request") || error.message.startsWith("AI generation")
             ? error.message
             : `Error fetching details for ${locationName} from AI: ${error.message}`;
+    }
+    throw new Error(errorMessage);
+  }
+};
+
+export const fetchNavigatorGuidanceFromGemini = async (userPrompt: string): Promise<string> => {
+  const genAI = getGoogleGenAI();
+  const cacheKey = `${CACHE_PREFIX_NAVIGATOR}${userPrompt.toLowerCase().replace(/\s+/g, '_').substring(0, 100)}`; 
+
+  try {
+    const cachedData = localStorage.getItem(cacheKey);
+    if (cachedData) {
+      console.log(`Serving Navigator guidance for prompt starting with "${userPrompt.substring(0, 50)}..." from cache.`);
+      return JSON.parse(cachedData) as string;
+    }
+  } catch (error) {
+    console.warn(`Error reading Navigator cache for prompt "${userPrompt.substring(0, 50)}...":`, error);
+  }
+  
+  const systemInstruction = `
+    You are an AI assistant for a Pokemon Nuzlocke challenge application, specifically for Pokemon Ultra Sun and Ultra Moon.
+    The user will ask a question related to their Nuzlocke run.
+    Your goal is to provide helpful, concise, and informative answers that aid the player in their Nuzlocke challenge.
+    
+    Key Guidelines:
+    1.  **Nuzlocke Focus:** Tailor your advice to the Nuzlocke ruleset (first encounter per area, permadeath).
+    2.  **Ultra Sun/Ultra Moon Specifics:** Ensure your information is accurate for Pokemon Ultra Sun and Ultra Moon. Note differences from Sun/Moon if relevant and known.
+    3.  **Avoid Excessive Spoilers:** 
+        *   When asked about a trainer's team (e.g., a Totem Pokemon, Kahuna, or major rival battle), you can mention the primary Pokemon's type(s), its level, and perhaps one or two of its notable Pokemon or a key strategy (e.g., "Totem Lurantis is Grass-type, level 24, and often calls for allies like Comfey or Castform. It can be tricky due to its high Special Defense and powerful Grass moves."). 
+        *   Do NOT list full teams with all movesets, abilities, and items unless the user explicitly asks for that extreme level of detail. Err on the side of less detailed spoilers.
+        *   For general locations, focus on common encounters, important items, or general strategies rather than exhaustive lists.
+    4.  **Conciseness:** Provide the necessary information without being overly verbose. Get to the point.
+    5.  **Formatting:** Use clear language. You can use paragraphs. If listing items or Pokémon, you can use simple markdown lists like:
+        *   Item 1
+        *   Pokemon A
+    6.  **Handling Off-Topic/Broad Questions:** If the question is too broad, unrelated to Pokémon Nuzlockes, or asks for information outside of Ultra Sun/Ultra Moon, politely state that you can only assist with Nuzlocke-related queries for Pokémon Ultra Sun and Ultra Moon.
+    7.  **Output:** Respond with plain text. Do not wrap your response in JSON or markdown code fences.
+    8.  **Output Formatting for Links:**
+        *   When you mention a specific Pokémon name (e.g., Pikachu, Snorlax, Rowlet), please wrap it in double curly braces: \`{{PokemonName}}\`. For example, \`{{Pikachu}}\` or \`{{Rowlet}}\`.
+        *   When you mention a specific game location from the Alola region that players visit (e.g., Iki Town, Route 1, Paniola Ranch), please wrap it in double square brackets: \`[[LocationName]]\`. For example, \`[[Iki Town]]\` or \`[[Paniola Ranch]]\`.
+  `;
+
+  try {
+    const response: GenerateContentResponse = await genAI.models.generateContent({
+        model: GEMINI_MODEL_NAME,
+        contents: userPrompt, // User's question is the main content
+        config: {
+            systemInstruction: systemInstruction,
+            temperature: 0.3, 
+            topK: 40,
+            topP: 0.95,
+        }
+    });
+    
+    const textOutput = response.text;
+
+    if (typeof textOutput !== 'string' || textOutput.trim() === "") {
+        let detailedErrorMsg = `AI response did not contain any text output for your query.`;
+         if (response.promptFeedback?.blockReason) {
+            detailedErrorMsg = `Your query was blocked. Reason: ${response.promptFeedback.blockReason}. ${response.promptFeedback.blockReasonMessage || 'No additional message provided.'}`;
+        } else if (response.candidates && response.candidates.length > 0) {
+            const candidate = response.candidates[0];
+            if (candidate.finishReason && candidate.finishReason !== 'STOP') {
+                detailedErrorMsg = `AI generation for your query stopped prematurely. Reason: ${candidate.finishReason}.`;
+            } else if (candidate.safetyRatings && candidate.safetyRatings.some(r => r.blocked)) {
+                detailedErrorMsg = `AI response for your query might have been blocked by safety filters.`;
+            }
+        }
+        console.error("Full AI response when text was missing for navigator:", JSON.stringify(response, null, 2));
+        throw new Error(detailedErrorMsg);
+    }
+
+    try {
+      localStorage.setItem(cacheKey, JSON.stringify(textOutput));
+      console.log(`Navigator guidance for prompt "${userPrompt.substring(0,50)}..." cached.`);
+    } catch (error) {
+      console.warn(`Error saving Navigator cache for prompt "${userPrompt.substring(0,50)}...":`, error);
+    }
+
+    return textOutput;
+
+  } catch (error) {
+    console.error(`Error processing Gemini API response for navigator prompt "${userPrompt.substring(0,50)}...":`, error);
+    
+    let errorMessage = `Failed to get guidance from AI.`;
+    if (error instanceof Error) {
+         errorMessage = error.message.startsWith("AI response") || error.message.startsWith("Your query was blocked") || error.message.startsWith("AI generation")
+            ? error.message
+            : `Error fetching guidance from AI: ${error.message}`;
     }
     throw new Error(errorMessage);
   }
