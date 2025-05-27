@@ -1,4 +1,3 @@
-
 import { 
   PokeApiPokemon, 
   PokeApiSpecies, 
@@ -9,11 +8,23 @@ import {
   PokemonEvolutionStep,
   PokemonMoveInfo,
   PokeApiResource,
-  PokeApiMoveData // Added
+  PokeApiMoveData,
+  PokeApiAbility, // Added
+  AbilityDetailData, // Added
+  FullPokeApiMoveData, // Added
+  FullMoveDetailData // Added
 } from '../types';
 
 const POKEAPI_BASE_URL = 'https://pokeapi.co/api/v2';
 const CACHE_PREFIX_POKEMON = "pokemon_cache_";
+const CACHE_PREFIX_ABILITY = "ability_cache_";
+const CACHE_PREFIX_MOVE = "move_cache_";
+const CACHE_EXPIRATION_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+interface CacheEntry<T> {
+  timestamp: number;
+  data: T;
+}
 
 async function fetchPokeApi<T>(endpoint: string): Promise<T> {
   const response = await fetch(`${POKEAPI_BASE_URL}/${endpoint}`);
@@ -23,6 +34,37 @@ async function fetchPokeApi<T>(endpoint: string): Promise<T> {
   }
   return response.json() as T;
 }
+
+function getCachedData<T>(cacheKey: string): T | null {
+  try {
+    const item = localStorage.getItem(cacheKey);
+    if (!item) return null;
+    const entry = JSON.parse(item) as CacheEntry<T>;
+    if (Date.now() - entry.timestamp > CACHE_EXPIRATION_MS) {
+      localStorage.removeItem(cacheKey);
+      return null;
+    }
+    return entry.data;
+  } catch (error) {
+    console.warn(`Error reading cache for ${cacheKey}:`, error);
+    return null;
+  }
+}
+
+function setCachedData<T>(cacheKey: string, data: T): void {
+  try {
+    const entry: CacheEntry<T> = { timestamp: Date.now(), data };
+    localStorage.setItem(cacheKey, JSON.stringify(entry));
+  } catch (error) {
+    console.warn(`Error setting cache for ${cacheKey}:`, error);
+  }
+}
+
+const extractIdFromUrl = (url: string): string => {
+  const parts = url.split('/');
+  return parts[parts.length - 2];
+};
+
 
 function processEvolutionChain(chainLink: PokeApiEvolutionChainLink, currentPokemonId: number): PokemonDetailData['evolutions'] {
     const evolutions: PokemonDetailData['evolutions'] = {
@@ -122,7 +164,6 @@ function processEvolutionChain(chainLink: PokeApiEvolutionChainLink, currentPoke
     return evolutions;
 }
 
-
 export const fetchPokemonDetails = async (pokemonNameOrId: string | number): Promise<PokemonDetailData> => {
   let apiCompatibleNameOrId: string;
 
@@ -130,31 +171,26 @@ export const fetchPokemonDetails = async (pokemonNameOrId: string | number): Pro
     let name = pokemonNameOrId.toLowerCase();
     if (name.startsWith('alolan ')) {
       const baseName = name.substring(7).trim().replace(/\s+/g, '-');
-      apiCompatibleNameOrId = `${baseName}-alola`; // Corrected: -alola instead of -alolan
+      apiCompatibleNameOrId = `${baseName}-alola`;
     } else {
-      apiCompatibleNameOrId = name.replace(/\s+/g, '-').replace(/[.'']/g, '');
+      apiCompatibleNameOrId = name.replace(/\s+/g, '-').replace(/[.'"]/g, '');
     }
   } else {
     apiCompatibleNameOrId = pokemonNameOrId.toString();
   }
   
   const cacheKey = `${CACHE_PREFIX_POKEMON}${apiCompatibleNameOrId}`;
+  let cached = getCachedData<PokemonDetailData>(cacheKey); 
 
-  try {
-    const cachedData = localStorage.getItem(cacheKey);
-    if (cachedData) {
-      console.log(`Serving Pokémon data for "${apiCompatibleNameOrId}" from cache.`);
-      const parsed = JSON.parse(cachedData) as PokemonDetailData;
-      // Ensure moves have all fields, even if cached before this change
-      parsed.moves = parsed.moves.map(m => ({
-          ...m,
-          power: m.power === undefined ? null : m.power,
-          accuracy: m.accuracy === undefined ? null : m.accuracy,
-      }));
-      return parsed;
+  if (cached) {
+    if (cached.abilities && cached.abilities.length > 0 && typeof (cached.abilities as any)[0] === 'string') {
+        console.warn(`Old ability format (string[]) found in cache for ${apiCompatibleNameOrId}. Invalidating cache and refetching.`);
+        localStorage.removeItem(cacheKey);
+        cached = null; 
+    } else {
+        console.log(`Serving Pokémon data for "${apiCompatibleNameOrId}" from cache.`);
+        return cached; 
     }
-  } catch (error) {
-    console.warn(`Error reading Pokémon cache for "${apiCompatibleNameOrId}":`, error);
   }
   
   const pokemonData = await fetchPokeApi<PokeApiPokemon>(`pokemon/${apiCompatibleNameOrId}`);
@@ -170,8 +206,8 @@ export const fetchPokemonDetails = async (pokemonNameOrId: string | number): Pro
     }
   }
 
-  const flavorTextEntry = speciesData.flavor_text_entries.find(entry => entry.language.name === 'en');
-  const flavorText = flavorTextEntry ? flavorTextEntry.flavor_text.replace(/[\n\f\r]/g, ' ') : "No flavor text available.";
+  const flavorTextEntry = speciesData.flavor_text_entries.find(entry => entry.language.name === 'en' && (entry.version.name === 'ultra-sun' || entry.version.name === 'ultra-moon'));
+  const flavorText = flavorTextEntry ? flavorTextEntry.flavor_text.replace(/[\n\f\r]/g, ' ') : "No flavor text available for Ultra Sun/Moon.";
 
   const genusEntry = speciesData.genera.find(g => g.language.name === 'en');
   const genus = genusEntry ? genusEntry.genus : "Unknown Pokémon";
@@ -181,11 +217,15 @@ export const fetchPokemonDetails = async (pokemonNameOrId: string | number): Pro
     value: s.base_stat,
   }));
 
-  const abilities = pokemonData.abilities.map(a => ({
-    name: a.ability.name.replace(/-/g, ' ').split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' '),
+  const structuredAbilities = pokemonData.abilities.map(a => ({
+    displayName: a.ability.name.replace(/-/g, ' ').split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' '),
+    rawName: a.ability.name,
     isHidden: a.is_hidden,
-  })).sort((a,b) => a.isHidden === b.isHidden ? 0 : a.isHidden ? 1 : -1) 
-   .map(a => `${a.name}${a.isHidden ? ' (Hidden)' : ''}`);
+  })).sort((a,b) => {
+    if (a.isHidden !== b.isHidden) return a.isHidden ? 1 : -1;
+    return a.displayName.localeCompare(b.displayName);
+  });
+
 
   const levelUpMoves = pokemonData.moves
     .map(moveData => {
@@ -194,23 +234,24 @@ export const fetchPokemonDetails = async (pokemonNameOrId: string | number): Pro
       );
       if (ultraSunUltraMoonDetail && ultraSunUltraMoonDetail.level_learned_at > 0) {
         return {
-          name: moveData.move.name, // Keep raw name for API lookup
-          displayName: moveData.move.name.replace(/-/g, ' ').split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' '),
+          rawName: moveData.move.name,
+          name: moveData.move.name.replace(/-/g, ' ').split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' '),
           levelLearnedAt: ultraSunUltraMoonDetail.level_learned_at,
           learnMethod: 'Level Up',
         };
       }
       return null;
     })
-    .filter((move): move is { name: string; displayName: string; levelLearnedAt: number; learnMethod: string; } => move !== null)
+    .filter((move): move is { rawName: string; name: string; levelLearnedAt: number; learnMethod: string; } => move !== null)
     .sort((a, b) => (a.levelLearnedAt || 0) - (b.levelLearnedAt || 0));
 
-  const detailedMovesPromises = levelUpMoves.slice(0, 15).map(async (basicMoveInfo) => {
+  const detailedMovesPromises = levelUpMoves.slice(0, 20).map(async (basicMoveInfo) => { 
     try {
-      const moveDetails = await fetchPokeApi<PokeApiMoveData>(`move/${basicMoveInfo.name}`);
+      const moveDetails = await fetchPokeApi<PokeApiMoveData>(`move/${basicMoveInfo.rawName}`);
       const effectEntry = moveDetails.effect_entries.find(e => e.language.name === 'en');
       return {
-        name: basicMoveInfo.displayName,
+        rawName: basicMoveInfo.rawName,
+        name: basicMoveInfo.name,
         levelLearnedAt: basicMoveInfo.levelLearnedAt,
         learnMethod: basicMoveInfo.learnMethod,
         power: moveDetails.power,
@@ -219,15 +260,16 @@ export const fetchPokemonDetails = async (pokemonNameOrId: string | number): Pro
         moveType: moveDetails.type.name.charAt(0).toUpperCase() + moveDetails.type.name.slice(1),
         damageClass: moveDetails.damage_class.name.charAt(0).toUpperCase() + moveDetails.damage_class.name.slice(1),
         shortEffect: effectEntry ? effectEntry.short_effect.replace(/\$effect_chance/g, `${moveDetails.effect_chance || ''}`) : 'No effect description.',
-      };
+      } as PokemonMoveInfo;
     } catch (moveError) {
       console.warn(`Failed to fetch details for move ${basicMoveInfo.name}:`, moveError);
-      return { // Return basic info if detailed fetch fails
-        name: basicMoveInfo.displayName,
+      return { 
+        rawName: basicMoveInfo.rawName,
+        name: basicMoveInfo.name,
         levelLearnedAt: basicMoveInfo.levelLearnedAt,
         learnMethod: basicMoveInfo.learnMethod,
         power: null, accuracy: null, pp: undefined, moveType: undefined, damageClass: undefined, shortEffect: 'Error fetching details.',
-      };
+      } as PokemonMoveInfo;
     }
   });
 
@@ -235,24 +277,117 @@ export const fetchPokemonDetails = async (pokemonNameOrId: string | number): Pro
 
   const processedPokemonDetails: PokemonDetailData = {
     id: pokemonData.id,
-    name: pokemonData.name.charAt(0).toUpperCase() + pokemonData.name.slice(1),
+    name: pokemonData.name.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join('-'),
     spriteUrl: pokemonData.sprites.other?.['official-artwork']?.front_default || pokemonData.sprites.front_default,
     shinySpriteUrl: pokemonData.sprites.other?.['official-artwork']?.front_shiny || pokemonData.sprites.front_shiny,
     genus,
     types: pokemonData.types.map(t => t.type.name.charAt(0).toUpperCase() + t.type.name.slice(1)),
-    abilities,
+    abilities: structuredAbilities,
     baseStats,
     evolutions: evolutionDataProcessed,
     flavorText,
     moves: resolvedDetailedMoves,
   };
-
-  try {
-    localStorage.setItem(cacheKey, JSON.stringify(processedPokemonDetails));
-    console.log(`Pokémon data for "${apiCompatibleNameOrId}" cached.`);
-  } catch (error) {
-    console.warn(`Error saving Pokémon cache for "${apiCompatibleNameOrId}":`, error);
-  }
+  
+  setCachedData(cacheKey, processedPokemonDetails);
+  console.log(`Pokémon data for "${apiCompatibleNameOrId}" cached (new format).`);
 
   return processedPokemonDetails;
+};
+
+
+export const fetchAbilityDetails = async (abilityNameOrId: string | number): Promise<AbilityDetailData> => {
+  const apiCompatibleName = abilityNameOrId.toString().toLowerCase().replace(/\s+/g, '-');
+  const cacheKey = `${CACHE_PREFIX_ABILITY}${apiCompatibleName}`;
+  
+  const cached = getCachedData<AbilityDetailData>(cacheKey);
+  if (cached) {
+    // Validate cache structure if needed, e.g. pokemonWithAbility having IDs
+    if (cached.pokemonWithAbility && cached.pokemonWithAbility.length > 0 && cached.pokemonWithAbility[0].id === undefined) {
+        console.warn(`Old AbilityDetailData format (missing id in pokemonWithAbility) found in cache for ${apiCompatibleName}. Invalidating.`);
+        localStorage.removeItem(cacheKey);
+    } else {
+        console.log(`Serving Ability data for "${apiCompatibleName}" from cache.`);
+        return cached;
+    }
+  }
+
+  const abilityData = await fetchPokeApi<PokeApiAbility>(`ability/${apiCompatibleName}`);
+
+  const effectEntry = abilityData.effect_entries.find(e => e.language.name === 'en');
+  const shortEffectEntry = abilityData.effect_entries.find(e => e.language.name === 'en' && e.short_effect);
+  
+  const flavorTextEntry = abilityData.flavor_text_entries.find(
+    ft => ft.language.name === 'en' && (ft.version_group.name === 'ultra-sun-ultra-moon' || ft.version_group.name === 'sun-moon')
+  );
+
+  const usumPokemon = abilityData.pokemon.map(p => ({
+    name: p.pokemon.name.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join('-'),
+    isHidden: p.is_hidden,
+    id: extractIdFromUrl(p.pokemon.url) // Extract ID
+  })).sort((a,b) => a.name.localeCompare(b.name));
+
+
+  const processedData: AbilityDetailData = {
+    id: abilityData.id,
+    name: abilityData.names.find(n => n.language.name === 'en')?.name || abilityData.name.split('-').map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join(' '),
+    effect: effectEntry ? effectEntry.effect.replace(/\s+/g, ' ') : "No effect description available.",
+    shortEffect: shortEffectEntry ? shortEffectEntry.short_effect.replace(/\s+/g, ' ') : "No short effect description.",
+    flavorText: flavorTextEntry ? flavorTextEntry.flavor_text.replace(/\s+/g, ' ') : "No flavor text available for Ultra Sun/Moon.",
+    pokemonWithAbility: usumPokemon,
+  };
+  
+  setCachedData(cacheKey, processedData);
+  console.log(`Ability data for "${apiCompatibleName}" cached.`);
+  return processedData;
+};
+
+export const fetchFullMoveDetails = async (moveNameOrId: string | number): Promise<FullMoveDetailData> => {
+  const apiCompatibleName = typeof moveNameOrId === 'string' 
+    ? moveNameOrId.toLowerCase().replace(/\s+/g, '-') 
+    : moveNameOrId.toString();
+
+  const cacheKey = `${CACHE_PREFIX_MOVE}${apiCompatibleName}`;
+
+  const cached = getCachedData<FullMoveDetailData>(cacheKey);
+  if (cached) {
+    if (!cached.learnedByPokemon) { // Check if old cache format without learnedByPokemon
+        console.warn(`Old FullMoveDetailData format (missing learnedByPokemon) found in cache for ${apiCompatibleName}. Invalidating.`);
+        localStorage.removeItem(cacheKey);
+    } else {
+        console.log(`Serving Full Move data for "${apiCompatibleName}" from cache.`);
+        return cached;
+    }
+  }
+
+  const moveData = await fetchPokeApi<FullPokeApiMoveData>(`move/${apiCompatibleName}`);
+  
+  const effectEntry = moveData.effect_entries.find(e => e.language.name === 'en');
+  const flavorTextEntry = moveData.flavor_text_entries.find(
+    ft => ft.language.name === 'en' && (ft.version_group.name === 'ultra-sun-ultra-moon' || ft.version_group.name === 'sun-moon')
+  );
+
+  const learnedByPokemonProcessed = (moveData.learned_by_pokemon || []).map(p => ({
+    name: p.name.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join('-'),
+    id: extractIdFromUrl(p.url) // Extract ID from URL
+  })).sort((a,b) => a.name.localeCompare(b.name));
+
+  const processedData: FullMoveDetailData = {
+    id: moveData.id,
+    name: moveData.name.split('-').map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join(' '),
+    accuracy: moveData.accuracy,
+    power: moveData.power,
+    pp: moveData.pp,
+    type: moveData.type.name.charAt(0).toUpperCase() + moveData.type.name.slice(1),
+    damageClass: moveData.damage_class.name.charAt(0).toUpperCase() + moveData.damage_class.name.slice(1),
+    effect: effectEntry ? effectEntry.effect.replace(/\$effect_chance/g, `${moveData.effect_chance || ''}`).replace(/\s+/g, ' ') : "No effect description.",
+    effectChance: moveData.effect_chance,
+    flavorText: flavorTextEntry ? flavorTextEntry.flavor_text.replace(/\s+/g, ' ') : "No flavor text available for Ultra Sun/Moon.",
+    target: moveData.target.name.replace(/-/g, ' ').split(' ').map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join(' '),
+    learnedByPokemon: learnedByPokemonProcessed,
+  };
+
+  setCachedData(cacheKey, processedData);
+  console.log(`Full Move data for "${apiCompatibleName}" cached.`);
+  return processedData;
 };

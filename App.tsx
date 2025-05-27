@@ -1,13 +1,18 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { GameLocationNode, DetailedLocationInfo, TeamMember, PokemonDetailData, CaughtStatusMap, AddTeamMemberData, PokemonMoveInfo } from './types';
+import { 
+  GameLocationNode, DetailedLocationInfo, TeamMember, 
+  PokemonDetailData, CaughtStatusMap, AddTeamMemberData, PokemonMoveInfo,
+  AbilityDetailData, FullMoveDetailData // Added types
+} from './types';
 import { ULTRA_MOON_PROGRESSION } from './constants';
 import { GameProgressionTree } from './components/GameProgressionTree';
 import { LocationDetailsDisplay } from './components/LocationDetailsDisplay';
 import { TeamManager } from './components/TeamManager';
-import { PokemonDetailBar } from './components/PokemonDetailBar';
+// import { PokemonDetailBar } from './components/PokemonDetailBar'; // Replaced by DetailDisplayController
+import { DetailDisplayController } from './components/DetailDisplayController'; // New component
 import { fetchLocationDetailsFromGemini } from './services/geminiService';
-import { fetchPokemonDetails } from './services/pokeApiService';
+import { fetchPokemonDetails, fetchAbilityDetails, fetchFullMoveDetails } from './services/pokeApiService';
 
 
 // Placeholder icons - replace with actual SVGs or a library if needed
@@ -32,8 +37,8 @@ const App: React.FC = () => {
       return [];
     }
   });
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
+  const [isLoadingLocation, setIsLoadingLocation] = useState<boolean>(false);
+  const [locationError, setLocationError] = useState<string | null>(null);
   const [apiKeyMissing, setApiKeyMissing] = useState<boolean>(false);
   
   const [levelCap, setLevelCap] = useState<number | null>(null);
@@ -41,18 +46,24 @@ const App: React.FC = () => {
   const [nextBattleLocation, setNextBattleLocation] = useState<string | null>(null);
   const [nextBattlePokemonCount, setNextBattlePokemonCount] = useState<number | null>(null);
 
+  // --- Bottom Bar State ---
+  const [activeBottomBarView, setActiveBottomBarView] = useState<'pokemon' | 'ability' | 'move' | null>(null);
   const [selectedPokemonDetailData, setSelectedPokemonDetailData] = useState<PokemonDetailData | null>(null);
-  const [isLoadingPokemonDetailData, setIsLoadingPokemonDetailData] = useState<boolean>(false);
-  const [pokemonDetailDataError, setPokemonDetailDataError] = useState<string | null>(null);
+  const [selectedAbilityDetailData, setSelectedAbilityDetailData] = useState<AbilityDetailData | null>(null);
+  const [selectedMoveDetailData, setSelectedMoveDetailData] = useState<FullMoveDetailData | null>(null);
+  const [pokemonContextForDetailView, setPokemonContextForDetailView] = useState<PokemonDetailData | null>(null);
+
+  const [isLoadingDetail, setIsLoadingDetail] = useState<boolean>(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  // --- End Bottom Bar State ---
 
   const [caughtPokemon, setCaughtPokemon] = useState<CaughtStatusMap>({});
-
   const [selectedMoveForAssignment, setSelectedMoveForAssignment] = useState<{ pokemonId: number; moveName: string; moveDetails: PokemonMoveInfo } | null>(null);
 
   useEffect(() => {
     if (!process.env.API_KEY) {
       setApiKeyMissing(true);
-      setError("API Key is missing. Please set the API_KEY environment variable.");
+      setLocationError("API Key is missing. Please set the API_KEY environment variable.");
     }
     try {
       const storedCaughtPokemon = localStorage.getItem(CAUGHT_POKEMON_STORAGE_KEY);
@@ -80,28 +91,20 @@ const App: React.FC = () => {
     }
   }, [team]);
 
-  // Effect to auto-assign staged move to an existing team member
   useEffect(() => {
     if (selectedMoveForAssignment) {
       const targetPokemonId = selectedMoveForAssignment.pokemonId;
       const moveNameToAssign = selectedMoveForAssignment.moveName;
-
       const teamMemberIndex = team.findIndex(member => member.pokemonId === targetPokemonId);
-
       if (teamMemberIndex !== -1) {
         setTeam(prevTeam => {
           const updatedTeam = [...prevTeam];
           const memberToUpdate = { ...updatedTeam[teamMemberIndex] };
           let currentMoves = [...(memberToUpdate.moves || ['', '', '', ''])];
-          
-          // Prevent adding duplicate moves
           if (currentMoves.includes(moveNameToAssign)) {
-            // Optionally, provide feedback that move is already learned
-            // console.log(`${memberToUpdate.nickname || memberToUpdate.species} already knows ${moveNameToAssign}.`);
-            setSelectedMoveForAssignment(null); // Clear staged move
-            return prevTeam; // No change
+            setSelectedMoveForAssignment(null); 
+            return prevTeam; 
           }
-
           let assigned = false;
           for (let i = 0; i < 4; i++) {
             if (!currentMoves[i] || currentMoves[i] === "") {
@@ -110,90 +113,61 @@ const App: React.FC = () => {
               break;
             }
           }
-          if (!assigned) { // If all slots are full, replace the first move
-            currentMoves[0] = moveNameToAssign;
-          }
+          if (!assigned) { currentMoves[0] = moveNameToAssign; }
           memberToUpdate.moves = currentMoves;
           updatedTeam[teamMemberIndex] = memberToUpdate;
           return updatedTeam;
         });
-        console.log(`Assigned ${moveNameToAssign} to ${team[teamMemberIndex].nickname || team[teamMemberIndex].species}.`);
-        setSelectedMoveForAssignment(null); // Clear staged move after assignment
+        setSelectedMoveForAssignment(null);
       }
     }
   }, [selectedMoveForAssignment, team]);
 
-
   const handleToggleCaughtStatus = useCallback((pokemonId: string | number) => {
     const idStr = pokemonId.toString();
-    setCaughtPokemon(prev => ({
-      ...prev,
-      [idStr]: !prev[idStr]
-    }));
+    setCaughtPokemon(prev => ({ ...prev, [idStr]: !prev[idStr] }));
   }, []);
 
   const addTeamMember = useCallback((memberData: AddTeamMemberData) => {
     const newMoves = ['', '', '', ''];
-    if (memberData.initialMove) {
-        newMoves[0] = memberData.initialMove;
-    }
+    if (memberData.initialMove) { newMoves[0] = memberData.initialMove; }
     setTeam(prevTeam => [
         ...prevTeam, 
         { 
-            id: Date.now().toString(), // Ensure id is always string
-            species: memberData.species,
-            level: memberData.level,
-            nickname: memberData.nickname || memberData.species,
-            heldItem: '',
-            moves: newMoves,
-            isShiny: false,
-            pokemonId: memberData.pokemonId 
+            id: Date.now().toString(), species: memberData.species, level: memberData.level,
+            nickname: memberData.nickname || memberData.species, heldItem: '', moves: newMoves,
+            isShiny: false, pokemonId: memberData.pokemonId 
         }
     ]);
   }, []);
 
   const handleAddPokemonToTeamFromDetail = useCallback((speciesName: string, pokemonId: number) => {
-    const isAlreadyInTeam = team.some(member => member.species.toLowerCase() === speciesName.toLowerCase());
-    if (isAlreadyInTeam) {
-        alert(`${speciesName} is already in your team!`);
-        return;
+    if (team.some(member => member.pokemonId === pokemonId)) {
+        alert(`${speciesName} is already in your team!`); return;
     }
     if (team.length >= 6) {
-        alert("Your team is full (6 Pokémon maximum)!");
-        return;
+        alert("Your team is full (6 Pokémon maximum)!"); return;
     }
-
     let initialMoveName: string | undefined = undefined;
     if (selectedMoveForAssignment && selectedMoveForAssignment.pokemonId === pokemonId) {
         initialMoveName = selectedMoveForAssignment.moveName;
     }
-
-    addTeamMember({ 
-        species: speciesName, 
-        level: 5, 
-        pokemonId: pokemonId,
-        initialMove: initialMoveName
-    }); 
-
-    if (!caughtPokemon[pokemonId.toString()]) {
-        handleToggleCaughtStatus(pokemonId);
-    }
-    if (initialMoveName) {
-      setSelectedMoveForAssignment(null); // Clear staged move after adding to team
-    }
+    addTeamMember({ species: speciesName, level: 5, pokemonId: pokemonId, initialMove: initialMoveName }); 
+    if (!caughtPokemon[pokemonId.toString()]) { handleToggleCaughtStatus(pokemonId); }
+    if (initialMoveName) { setSelectedMoveForAssignment(null); }
   }, [team, caughtPokemon, handleToggleCaughtStatus, addTeamMember, selectedMoveForAssignment]);
-
 
   const handleSelectLocation = useCallback((location: GameLocationNode) => {
     setSelectedLocation(location);
     setLocationDetails(null); 
-    setError(null);
+    setLocationError(null);
   }, []);
 
   useEffect(() => {
+    // ... (level cap logic remains the same)
     let nextCap: number | null = null;
     let battleName: string | null = null;
-    let battleLocation: string | null = null;
+    let battleLoc: string | null = null; // Renamed to avoid conflict
     let battlePokemonCount: number | null = null;
 
     if (selectedLocation) {
@@ -204,7 +178,7 @@ const App: React.FC = () => {
           if (futureLocation.significantBattleLevel) {
             nextCap = futureLocation.significantBattleLevel;
             battleName = futureLocation.significantBattleName || "Significant Battle";
-            battleLocation = futureLocation.name; 
+            battleLoc = futureLocation.name; 
             battlePokemonCount = futureLocation.significantBattlePokemonCount || null;
             break; 
           }
@@ -213,126 +187,142 @@ const App: React.FC = () => {
     }
     setLevelCap(nextCap);
     setNextBattleName(battleName);
-    setNextBattleLocation(battleLocation);
+    setNextBattleLocation(battleLoc); // Use renamed variable
     setNextBattlePokemonCount(battlePokemonCount);
 
     if (selectedLocation && !apiKeyMissing) {
       const fetchAllDetails = async () => {
-        setIsLoading(true);
-        setError(null);
-        
+        setIsLoadingLocation(true);
+        setLocationError(null);
         try {
           const details = await fetchLocationDetailsFromGemini(selectedLocation.name);
           setLocationDetails(details);
         } catch (err) {
           console.error("Error fetching location details:", err);
-          if (err instanceof Error) {
-            setError(`Failed to fetch details for ${selectedLocation.name}: ${err.message}.`);
-          } else {
-            setError(`Failed to fetch details for ${selectedLocation.name}. An unknown error occurred.`);
-          }
+          setLocationError(err instanceof Error ? `Failed to fetch details for ${selectedLocation.name}: ${err.message}.` : `Failed to fetch details for ${selectedLocation.name}. An unknown error occurred.`);
           setLocationDetails(null);
         } finally {
-          setIsLoading(false);
+          setIsLoadingLocation(false);
         }
       };
       fetchAllDetails();
     } else if (!selectedLocation) {
         setLocationDetails(null);
-        setError(null);
+        setLocationError(null);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLocation, apiKeyMissing]);
 
-
-  const removeTeamMember = (id: string) => {
-    setTeam(prevTeam => prevTeam.filter(member => member.id !== id));
-  };
-
-  const handleUpdateTeamMemberNickname = useCallback((memberId: string, nickname: string) => {
-    setTeam(prevTeam => prevTeam.map(member => 
-      member.id === memberId ? { ...member, nickname } : member
-    ));
-  }, []);
-
-  const handleUpdateTeamMemberLevel = useCallback((memberId: string, level: number) => {
-    setTeam(prevTeam => prevTeam.map(member => 
-      member.id === memberId ? { ...member, level: Math.max(1, Math.min(100, level)) } : member
-    ));
-  }, []);
-
-  const handleUpdateTeamMemberItem = useCallback((memberId: string, item: string) => {
-    setTeam(prevTeam => prevTeam.map(member => 
-      member.id === memberId ? { ...member, heldItem: item } : member
-    ));
-  }, []);
-
+  const removeTeamMember = (id: string) => setTeam(prevTeam => prevTeam.filter(member => member.id !== id));
+  const handleUpdateTeamMemberNickname = useCallback((memberId: string, nickname: string) => setTeam(prevTeam => prevTeam.map(m => m.id === memberId ? { ...m, nickname } : m)), []);
+  const handleUpdateTeamMemberLevel = useCallback((memberId: string, level: number) => setTeam(prevTeam => prevTeam.map(m => m.id === memberId ? { ...m, level: Math.max(1, Math.min(100, level)) } : m)), []);
+  const handleUpdateTeamMemberItem = useCallback((memberId: string, item: string) => setTeam(prevTeam => prevTeam.map(m => m.id === memberId ? { ...m, heldItem: item } : m)), []);
   const handleUpdateTeamMemberMove = useCallback((memberId: string, moveIndex: number, moveName: string) => {
-    setTeam(prevTeam => prevTeam.map(member => {
-      if (member.id === memberId) {
-        const newMoves = [...(member.moves || ['', '', '', ''])];
-        newMoves[moveIndex] = moveName;
-        return { ...member, moves: newMoves };
-      }
-      return member;
+    setTeam(prevTeam => prevTeam.map(m => {
+      if (m.id === memberId) { const newMoves = [...(m.moves || ['', '', '', ''])]; newMoves[moveIndex] = moveName; return { ...m, moves: newMoves }; }
+      return m;
     }));
   }, []);
+  const handleToggleTeamMemberShiny = useCallback((memberId: string) => setTeam(prevTeam => prevTeam.map(m => m.id === memberId ? { ...m, isShiny: !m.isShiny } : m)), []);
 
-  const handleToggleTeamMemberShiny = useCallback((memberId: string) => {
-    setTeam(prevTeam => prevTeam.map(member => 
-      member.id === memberId ? { ...member, isShiny: !member.isShiny } : member
-    ));
-  }, []);
-
-
-  const handlePokemonNameClick = useCallback(async (pokemonName: string) => {
-    setIsLoadingPokemonDetailData(true);
-    setPokemonDetailDataError(null);
-    setSelectedPokemonDetailData(null); 
-    setSelectedMoveForAssignment(null); // Clear staged move when opening a new Pokemon detail
+  // --- Bottom Bar Handlers ---
+  const handleOpenPokemonDetail = useCallback(async (pokemonNameOrId: string | number) => {
+    setIsLoadingDetail(true);
+    setDetailError(null);
+    setSelectedPokemonDetailData(null);
+    setSelectedAbilityDetailData(null);
+    setSelectedMoveDetailData(null);
+    setPokemonContextForDetailView(null);
+    setSelectedMoveForAssignment(null);
     try {
-      const details = await fetchPokemonDetails(pokemonName);
+      const details = await fetchPokemonDetails(pokemonNameOrId);
       setSelectedPokemonDetailData(details);
+      setActiveBottomBarView('pokemon');
     } catch (err) {
-      console.error(`Error fetching Pokémon details for ${pokemonName}:`, err);
-      if (err instanceof Error) {
-        setPokemonDetailDataError(err.message);
-      } else {
-        setPokemonDetailDataError(`An unknown error occurred while fetching details for ${pokemonName}.`);
-      }
+      console.error(`Error fetching Pokémon details for ${pokemonNameOrId}:`, err);
+      setDetailError(err instanceof Error ? err.message : `An unknown error occurred while fetching details for ${pokemonNameOrId}.`);
+      setActiveBottomBarView(null);
     } finally {
-      setIsLoadingPokemonDetailData(false);
+      setIsLoadingDetail(false);
     }
   }, []);
 
-  const handleClosePokemonDetailBar = useCallback(() => {
+  const handleAbilityNameClick = useCallback(async (abilityName: string) => {
+    setIsLoadingDetail(true);
+    setDetailError(null);
+    setPokemonContextForDetailView(selectedPokemonDetailData); // Cache current Pokemon for "Back"
+    setSelectedAbilityDetailData(null);
+    try {
+      const details = await fetchAbilityDetails(abilityName);
+      setSelectedAbilityDetailData(details);
+      setActiveBottomBarView('ability');
+    } catch (err) {
+      console.error(`Error fetching ability details for ${abilityName}:`, err);
+      setDetailError(err instanceof Error ? err.message : `An unknown error occurred.`);
+      // Potentially revert to Pokemon view or close
+      setActiveBottomBarView(pokemonContextForDetailView ? 'pokemon' : null);
+    } finally {
+      setIsLoadingDetail(false);
+    }
+  }, [selectedPokemonDetailData]);
+
+  const handleMoveNameClick = useCallback(async (moveDisplayName: string, rawMoveName: string) => {
+    setIsLoadingDetail(true);
+    setDetailError(null);
+    setPokemonContextForDetailView(selectedPokemonDetailData); // Cache current Pokemon
+    setSelectedMoveDetailData(null);
+    try {
+      const details = await fetchFullMoveDetails(rawMoveName); // Use raw name for API
+      setSelectedMoveDetailData(details);
+      setActiveBottomBarView('move');
+    } catch (err) {
+      console.error(`Error fetching move details for ${rawMoveName}:`, err);
+      setDetailError(err instanceof Error ? err.message : `An unknown error occurred.`);
+      setActiveBottomBarView(pokemonContextForDetailView ? 'pokemon' : null);
+    } finally {
+      setIsLoadingDetail(false);
+    }
+  }, [selectedPokemonDetailData]);
+
+  const handleBackToPokemonDetail = useCallback(() => {
+    if (pokemonContextForDetailView) {
+      setSelectedPokemonDetailData(pokemonContextForDetailView);
+      setSelectedAbilityDetailData(null);
+      setSelectedMoveDetailData(null);
+      setActiveBottomBarView('pokemon');
+      setPokemonContextForDetailView(null);
+      setDetailError(null);
+    }
+  }, [pokemonContextForDetailView]);
+
+  const handleCloseBottomBar = useCallback(() => {
+    setActiveBottomBarView(null);
     setSelectedPokemonDetailData(null);
-    setPokemonDetailDataError(null);
-    setSelectedMoveForAssignment(null); // Also clear staged move on close
+    setSelectedAbilityDetailData(null);
+    setSelectedMoveDetailData(null);
+    setPokemonContextForDetailView(null);
+    setSelectedMoveForAssignment(null);
+    setDetailError(null);
   }, []);
+  // --- End Bottom Bar Handlers ---
 
   const handleStageMove = useCallback((pokemonId: number, moveName: string, moveDetails: PokemonMoveInfo) => {
     setSelectedMoveForAssignment(prev => {
-        // If clicking the same move again, unstage it
-        if (prev && prev.pokemonId === pokemonId && prev.moveName === moveName) {
-            return null;
-        }
+        if (prev && prev.pokemonId === pokemonId && prev.moveName === moveName) return null;
         return { pokemonId, moveName, moveDetails };
     });
   }, []);
 
   const stagedMoveNameForCurrentPokemon = 
-    selectedPokemonDetailData && selectedMoveForAssignment && selectedMoveForAssignment.pokemonId === selectedPokemonDetailData.id
+    selectedPokemonDetailData && activeBottomBarView === 'pokemon' && selectedMoveForAssignment && selectedMoveForAssignment.pokemonId === selectedPokemonDetailData.id
     ? selectedMoveForAssignment.moveName
     : null;
-
 
   if (apiKeyMissing) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-900 p-4">
         <div className="bg-slate-800 p-8 rounded-lg shadow-xl text-center">
           <h1 className="text-3xl font-bold text-red-500 mb-4">Configuration Error</h1>
-          <p className="text-slate-300 text-lg">{error}</p>
+          <p className="text-slate-300 text-lg">{locationError}</p>
           <p className="text-slate-400 mt-4">This application requires a Gemini API key to function. Please ensure the <code className="bg-slate-700 px-1 rounded">API_KEY</code> environment variable is correctly set up in your deployment environment.</p>
         </div>
       </div>
@@ -356,29 +346,29 @@ const App: React.FC = () => {
             <h1 className="text-4xl font-extrabold mb-2 text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-blue-500">
               {selectedLocation.name}
             </h1>
-            {isLoading && (
+            {isLoadingLocation && (
               <div className="flex items-center justify-center h-64">
                 <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-sky-500"></div>
                 <p className="ml-4 text-xl text-slate-300">Consulting the Pokedex Oracle...</p>
               </div>
             )}
-            {error && !isLoading && (
+            {locationError && !isLoadingLocation && (
                 <div className="bg-red-800/30 border border-red-700 text-red-300 p-4 rounded-lg shadow-md">
                     <p className="font-semibold">Error:</p>
-                    <p>{error}</p>
+                    <p>{locationError}</p>
                 </div>
             )}
-            {locationDetails && !isLoading && !error && (
+            {locationDetails && !isLoadingLocation && !locationError && (
               <LocationDetailsDisplay 
                 details={locationDetails} 
                 IconPokeball={IconPokeball}
                 IconTrainer={IconTrainer}
                 IconItem={IconItem}
                 IconBattle={IconBattle}
-                onPokemonNameClick={handlePokemonNameClick}
+                onPokemonNameClick={handleOpenPokemonDetail} // Updated to use general detail opener
               />
             )}
-             {!locationDetails && !isLoading && !error && !apiKeyMissing && (
+             {!locationDetails && !isLoadingLocation && !locationError && !apiKeyMissing && (
               <div className="text-center py-10 text-slate-400">
                 <p className="text-xl">Select a location to see details or waiting for data...</p>
               </div>
@@ -395,7 +385,7 @@ const App: React.FC = () => {
       <aside className="w-full md:w-1/4 bg-slate-800/50 p-4 md:p-6 shadow-lg overflow-y-auto md:max-h-screen border-l border-slate-700">
         <TeamManager
           team={team}
-          onAddTeamMember={addTeamMember} // This is still needed if we have other ways to add, but form is removed
+          onAddTeamMember={addTeamMember}
           onRemoveTeamMember={removeTeamMember}
           IconPokeball={IconPokeball}
           levelCap={levelCap}
@@ -410,18 +400,27 @@ const App: React.FC = () => {
         />
       </aside>
       
-      {(selectedPokemonDetailData || isLoadingPokemonDetailData || pokemonDetailDataError) && (
-        <PokemonDetailBar
+      {activeBottomBarView && (
+        <DetailDisplayController
+          activeView={activeBottomBarView}
           pokemonData={selectedPokemonDetailData}
-          isLoading={isLoadingPokemonDetailData}
-          error={pokemonDetailDataError}
-          onClose={handleClosePokemonDetailBar}
-          isCaught={!!selectedPokemonDetailData && !!caughtPokemon[selectedPokemonDetailData.id.toString()]}
+          abilityData={selectedAbilityDetailData}
+          moveData={selectedMoveDetailData}
+          isLoading={isLoadingDetail}
+          error={detailError}
+          onClose={handleCloseBottomBar}
+          onBackToPokemon={pokemonContextForDetailView ? handleBackToPokemonDetail : undefined}
+          pokemonContextForDetailViewName={pokemonContextForDetailView?.name}
+          // Props for PokemonDetailBar part
+          isCaught={!!(selectedPokemonDetailData && caughtPokemon[selectedPokemonDetailData.id.toString()])}
           onToggleCaught={handleToggleCaughtStatus}
           onAddToTeam={handleAddPokemonToTeamFromDetail}
-          onPokemonNameClick={handlePokemonNameClick}
           onStageMove={handleStageMove}
           stagedMoveNameForThisPokemon={stagedMoveNameForCurrentPokemon}
+          // Callbacks for navigation
+          onPokemonNameClickForEvolution={handleOpenPokemonDetail}
+          onAbilityNameClick={handleAbilityNameClick}
+          onMoveNameClick={handleMoveNameClick}
         />
       )}
     </div>

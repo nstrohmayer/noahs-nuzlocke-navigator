@@ -1,4 +1,3 @@
-
 export interface GameLocationNode {
   id: string;
   name: string;
@@ -6,6 +5,7 @@ export interface GameLocationNode {
   significantBattleLevel?: number; // Level of the ace/totem in a significant battle at this location
   significantBattleName?: string;  // Name of the significant battle/opponent
   significantBattlePokemonCount?: number; // Number of Pokemon the opponent has in this significant battle
+  island?: string; // Island where the location is
 }
 
 export interface TrainerInfo {
@@ -128,7 +128,7 @@ export interface PokeApiVerboseEffect extends PokeApiEffect {
   short_effect: string;
 }
 
-export interface PokeApiMoveData {
+export interface PokeApiMoveData { // This is used for the initial list of moves in PokemonDetailBar
   id: number;
   name: string;
   accuracy: number | null;
@@ -138,7 +138,8 @@ export interface PokeApiMoveData {
   damage_class: PokeApiNamedAPIResource;
   effect_entries: PokeApiVerboseEffect[];
   effect_chance?: number | null; 
-  // other fields as needed
+  // Other fields for full move detail might be needed if we expand this type for the dedicated view
+  // For now, PokemonMoveInfo will be a subset/processed version
 }
 
 
@@ -242,19 +243,25 @@ export interface PokemonEvolutionStep {
   conditions: string[];
 }
 
-export interface PokemonMoveInfo {
+export interface PokemonMoveInfo { // Basic move info for lists
   name: string;
   levelLearnedAt?: number;
   learnMethod: string;
-  // Detailed move info
   power?: number | null;
   accuracy?: number | null;
   pp?: number;
   moveType?: string;
   damageClass?: string;
   shortEffect?: string;
+  // Raw name for fetching full details
+  rawName?: string; 
 }
 
+export interface PokemonAbilityInfo {
+  displayName: string;
+  rawName: string;
+  isHidden: boolean;
+}
 
 export interface PokemonDetailData {
   id: number;
@@ -263,7 +270,7 @@ export interface PokemonDetailData {
   shinySpriteUrl?: string | null; 
   genus: string; 
   types: string[];
-  abilities: string[];
+  abilities: PokemonAbilityInfo[]; // Array of ability objects
   baseStats: PokemonBaseStat[];
   evolutions: {
     currentStage: { name: string; id: number; spriteUrl: string | null };
@@ -271,23 +278,155 @@ export interface PokemonDetailData {
     previousStage?: { name: string; id: number; spriteUrl: string | null }; 
   } | null; 
   flavorText: string;
-  moves: PokemonMoveInfo[]; // Key moves, now with more details
+  moves: PokemonMoveInfo[];
 }
 
 // Type for storing caught status
-export type CaughtStatusMap = Record<string, boolean>; // Pokemon ID (string) -> caught (boolean)
+export type CaughtStatusMap = Record<string, boolean>;
 
-// Props for PokemonDetailBar
+// --- Ability Detail Types ---
+export interface AbilityEffectChange {
+  effect_entries: PokeApiEffect[];
+  version_group: PokeApiNamedAPIResource;
+}
+
+export interface AbilityFlavorText {
+  flavor_text: string;
+  language: PokeApiNamedAPIResource;
+  version_group: PokeApiNamedAPIResource;
+}
+
+export interface AbilityPokemonEntry { // Renamed for clarity
+  is_hidden: boolean;
+  slot: number;
+  pokemon: PokeApiNamedAPIResource;
+}
+
+export interface PokeApiAbility {
+  id: number;
+  name: string;
+  is_main_series: boolean;
+  generation: PokeApiNamedAPIResource;
+  names: Array<{ name: string; language: PokeApiNamedAPIResource }>;
+  effect_entries: PokeApiVerboseEffect[];
+  effect_changes: AbilityEffectChange[];
+  flavor_text_entries: AbilityFlavorText[];
+  pokemon: AbilityPokemonEntry[]; 
+}
+
+export interface AbilityDetailData {
+  id: number;
+  name: string;
+  effect: string; // Primary effect in English
+  shortEffect: string; // Short effect in English
+  flavorText: string; // Flavor text for USUM if available
+  pokemonWithAbility: Array<{ name: string; isHidden: boolean; id: string | number }>; // Processed list for USUM, added id
+}
+
+// --- Full Move Detail Types ---
+export interface PokeApiMoveFlavorText {
+  flavor_text: string;
+  language: PokeApiNamedAPIResource;
+  version_group: PokeApiNamedAPIResource;
+}
+
+export interface PokeApiMoveMetaData {
+  ailment: PokeApiNamedAPIResource;
+  category: PokeApiNamedAPIResource;
+  min_hits: number | null;
+  max_hits: number | null;
+  min_turns: number | null;
+  max_turns: number | null;
+  drain: number;
+  healing: number;
+  crit_rate: number;
+  ailment_chance: number;
+  flinch_chance: number;
+  stat_chance: number;
+}
+
+export interface PokeApiPastMoveStatValues {
+  accuracy: number | null;
+  effect_chance: number | null;
+  power: number | null;
+  pp: number | null;
+  effect_entries: PokeApiVerboseEffect[];
+  type: PokeApiNamedAPIResource | null;
+  version_group: PokeApiNamedAPIResource;
+}
+
+export interface FullPokeApiMoveData extends PokeApiMoveData { // Extends the basic PokeApiMoveData
+  generation: PokeApiNamedAPIResource;
+  target: PokeApiNamedAPIResource;
+  flavor_text_entries: PokeApiMoveFlavorText[];
+  learned_by_pokemon: PokeApiNamedAPIResource[];
+  meta?: PokeApiMoveMetaData;
+  past_values?: PokeApiPastMoveStatValues[];
+}
+
+export interface FullMoveDetailData {
+  id: number;
+  name: string;
+  accuracy: number | null;
+  power: number | null;
+  pp: number;
+  type: string;
+  damageClass: string;
+  effect: string;
+  effectChance?: number | null;
+  flavorText: string; // USUM flavor text
+  target: string;
+  learnedByPokemon: Array<{ name: string; id: string | number }>; // Added processed list
+}
+
+
+// Props for PokemonDetailBar - now passed through DetailDisplayController
 export interface PokemonDetailBarProps {
-  pokemonData: PokemonDetailData | null;
-  isLoading: boolean;
-  error: string | null;
-  onClose: () => void;
+  pokemonData: PokemonDetailData; // Not nullable here, controller handles null
   isCaught: boolean;
   onToggleCaught: (pokemonId: string | number) => void;
   onAddToTeam: (speciesName: string, pokemonId: number) => void;
-  onPokemonNameClick: (pokemonName: string) => void; // For clicking evolutions
-  // Props for simplified move staging
+  onPokemonNameClickForEvolution: (pokemonNameOrId: string | number) => void; // Can take name or ID
+  onAbilityNameClick: (abilityName: string) => void; // abilityName is rawName
+  onMoveNameClick: (moveName: string, rawMoveName: string) => void; // Pass raw name for API lookup
   onStageMove: (pokemonId: number, moveName: string, moveDetails: PokemonMoveInfo) => void;
   stagedMoveNameForThisPokemon: string | null;
+  onClose: () => void; 
+}
+
+export interface AbilityDetailDisplayProps {
+  abilityData: AbilityDetailData;
+  onPokemonNameClick?: (pokemonNameOrId: string | number) => void; // Added for linking
+}
+
+export interface MoveDetailDisplayProps {
+  moveData: FullMoveDetailData;
+  onPokemonNameClick?: (pokemonNameOrId: string | number) => void; // Added for linking
+}
+
+
+// Props for DetailDisplayController
+export interface DetailDisplayControllerProps {
+  activeView: 'pokemon' | 'ability' | 'move';
+  pokemonData: PokemonDetailData | null;
+  abilityData: AbilityDetailData | null;
+  moveData: FullMoveDetailData | null; 
+  isLoading: boolean;
+  error: string | null;
+  
+  onClose: () => void;
+  onBackToPokemon?: () => void; 
+  pokemonContextForDetailViewName?: string | null;
+
+  // Props specifically for when PokemonDetailBar is active
+  isCaught?: boolean;
+  onToggleCaught?: (pokemonId: string | number) => void;
+  onAddToTeam?: (speciesName: string, pokemonId: number) => void;
+  onStageMove?: (pokemonId: number, moveName: string, moveDetails: PokemonMoveInfo) => void;
+  stagedMoveNameForThisPokemon?: string | null;
+
+  // Callbacks for navigation triggered from child components
+  onPokemonNameClickForEvolution: (pokemonNameOrId: string | number) => void; // Can take name or ID
+  onAbilityNameClick: (abilityName: string) => void; // abilityName is rawName
+  onMoveNameClick: (moveName: string, rawMoveName: string) => void; // Pass raw name for API lookup
 }
