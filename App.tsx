@@ -39,7 +39,14 @@ const App: React.FC = () => {
   });
   const [isLoadingLocation, setIsLoadingLocation] = useState<boolean>(false);
   const [locationError, setLocationError] = useState<string | null>(null);
-  const [apiKeyMissing, setApiKeyMissing] = useState<boolean>(false);
+  
+  const [apiKeyMissing, setApiKeyMissing] = useState<boolean>(() => {
+    const keyMissing = typeof import.meta.env === 'undefined' || !import.meta.env.VITE_GEMINI_API_KEY;
+    if (keyMissing) {
+        console.warn("VITE_GEMINI_API_KEY is missing. Application functionality will be limited.");
+    }
+    return keyMissing;
+  });
   
   const [levelCap, setLevelCap] = useState<number | null>(null);
   const [nextBattleName, setNextBattleName] = useState<string | null>(null);
@@ -68,14 +75,12 @@ const App: React.FC = () => {
   const [navigatorError, setNavigatorError] = useState<string | null>(null);
   // --- End Navigator State ---
 
+  // --- Sidebar State ---
+  const [isLeftSidebarCollapsed, setIsLeftSidebarCollapsed] = useState<boolean>(false);
+  // --- End Sidebar State ---
+
 
   useEffect(() => {
-    if (!process.env.API_KEY) {
-      setApiKeyMissing(true);
-      const commonError = "API Key is missing. Please set the API_KEY environment variable.";
-      setLocationError(commonError);
-      setNavigatorError(commonError + " The Navigator feature also requires this key.");
-    }
     try {
       const storedCaughtPokemon = localStorage.getItem(CAUGHT_POKEMON_STORAGE_KEY);
       if (storedCaughtPokemon) {
@@ -172,11 +177,10 @@ const App: React.FC = () => {
     setSelectedLocation(location);
     setLocationDetails(null); 
     setLocationError(null);
-    setActiveMainPanel('location'); // Switch to location view when a location is selected
+    setActiveMainPanel('location'); 
   }, []);
 
   useEffect(() => {
-    // ... (level cap logic remains the same)
     let nextCap: number | null = null;
     let battleName: string | null = null;
     let battleLoc: string | null = null; 
@@ -202,7 +206,13 @@ const App: React.FC = () => {
     setNextBattleLocation(battleLoc);
     setNextBattlePokemonCount(battlePokemonCount);
 
-    if (selectedLocation && !apiKeyMissing && activeMainPanel === 'location') {
+    if (apiKeyMissing) {
+      setLocationDetails(null);
+      setIsLoadingLocation(false);
+      return;
+    }
+
+    if (selectedLocation && activeMainPanel === 'location') {
       const fetchAllDetails = async () => {
         setIsLoadingLocation(true);
         setLocationError(null);
@@ -236,8 +246,12 @@ const App: React.FC = () => {
   }, []);
   const handleToggleTeamMemberShiny = useCallback((memberId: string) => setTeam(prevTeam => prevTeam.map(m => m.id === memberId ? { ...m, isShiny: !m.isShiny } : m)), []);
 
-  // --- Bottom Bar Handlers ---
   const handleOpenPokemonDetail = useCallback(async (pokemonNameOrId: string | number) => {
+    if (apiKeyMissing) {
+      setDetailError("Cannot fetch Pokémon details: API Key is missing.");
+      setIsLoadingDetail(false);
+      return;
+    }
     setIsLoadingDetail(true);
     setDetailError(null);
     setSelectedPokemonDetailData(null);
@@ -256,9 +270,14 @@ const App: React.FC = () => {
     } finally {
       setIsLoadingDetail(false);
     }
-  }, []);
+  }, [apiKeyMissing]);
 
   const handleAbilityNameClick = useCallback(async (abilityName: string) => {
+    if (apiKeyMissing) {
+      setDetailError("Cannot fetch ability details: API Key is missing.");
+      setIsLoadingDetail(false);
+      return;
+    }
     setIsLoadingDetail(true);
     setDetailError(null);
     setPokemonContextForDetailView(selectedPokemonDetailData); 
@@ -274,9 +293,14 @@ const App: React.FC = () => {
     } finally {
       setIsLoadingDetail(false);
     }
-  }, [selectedPokemonDetailData, pokemonContextForDetailView]);
+  }, [selectedPokemonDetailData, pokemonContextForDetailView, apiKeyMissing]);
 
   const handleMoveNameClick = useCallback(async (moveDisplayName: string, rawMoveName: string) => {
+    if (apiKeyMissing) {
+      setDetailError("Cannot fetch move details: API Key is missing.");
+      setIsLoadingDetail(false);
+      return;
+    }
     setIsLoadingDetail(true);
     setDetailError(null);
     setPokemonContextForDetailView(selectedPokemonDetailData); 
@@ -292,7 +316,7 @@ const App: React.FC = () => {
     } finally {
       setIsLoadingDetail(false);
     }
-  }, [selectedPokemonDetailData, pokemonContextForDetailView]);
+  }, [selectedPokemonDetailData, pokemonContextForDetailView, apiKeyMissing]);
 
   const handleBackToPokemonDetail = useCallback(() => {
     if (pokemonContextForDetailView) {
@@ -314,7 +338,6 @@ const App: React.FC = () => {
     setSelectedMoveForAssignment(null);
     setDetailError(null);
   }, []);
-  // --- End Bottom Bar Handlers ---
 
   const handleStageMove = useCallback((pokemonId: number, moveName: string, moveDetails: PokemonMoveInfo) => {
     setSelectedMoveForAssignment(prev => {
@@ -328,17 +351,14 @@ const App: React.FC = () => {
     ? selectedMoveForAssignment.moveName
     : null;
 
-  // --- Navigator Handlers ---
   const switchToNavigatorPanel = () => {
     setActiveMainPanel('navigator');
-    // Optionally clear selectedLocation or locationDetails if they shouldn't persist when Navigator is active
-    // setSelectedLocation(null); 
-    // setLocationDetails(null);
   };
 
   const handleNavigatorSubmit = async (prompt: string) => {
     if (apiKeyMissing) {
       setNavigatorError("API Key is missing. Navigator cannot function.");
+      setIsLoadingNavigatorQuery(false);
       return;
     }
     setIsLoadingNavigatorQuery(true);
@@ -361,16 +381,32 @@ const App: React.FC = () => {
     setNavigatorError(null);
     setIsLoadingNavigatorQuery(false);
   };
-  // --- End Navigator Handlers ---
 
-  if (apiKeyMissing && !navigatorError && !locationError) { // Initial check if errors not yet set by useEffect
-     const commonError = "API Key is missing. Please set the API_KEY environment variable.";
+  if (apiKeyMissing) {
      return (
       <div className="min-h-screen flex items-center justify-center bg-slate-900 p-4">
-        <div className="bg-slate-800 p-8 rounded-lg shadow-xl text-center">
+        <div className="bg-slate-800 p-8 rounded-lg shadow-xl text-center max-w-lg w-full">
           <h1 className="text-3xl font-bold text-red-500 mb-4">Configuration Error</h1>
-          <p className="text-slate-300 text-lg">{commonError}</p>
-          <p className="text-slate-400 mt-4">This application requires a Gemini API key to function. Please ensure the <code className="bg-slate-700 px-1 rounded">API_KEY</code> environment variable is correctly set up in your deployment environment.</p>
+          <p className="text-slate-300 text-lg mb-3">
+            API Key is missing. Please set the <code className="bg-slate-700 px-1 rounded text-base">VITE_GEMINI_API_KEY</code> environment variable.
+          </p>
+          <p className="text-slate-300 mt-4 text-left">
+            This application requires a Gemini API key to function. To resolve this:
+          </p>
+          <ul className="list-disc list-inside text-left text-slate-300 text-sm mt-2 space-y-1.5 pl-4 bg-slate-700/30 p-3 rounded-md">
+            <li>Ensure a file named <code className="bg-slate-600 px-1 rounded">.env</code> exists in your project's root directory.</li>
+            <li>Inside the <code className="bg-slate-600 px-1 rounded">.env</code> file, add a line: <br />
+                <code className="bg-slate-600 px-1 rounded text-xs sm:text-sm">VITE_GEMINI_API_KEY=YOUR_ACTUAL_GEMINI_API_KEY</code>
+                <br/>(Replace <code className="bg-slate-500 px-0.5 rounded">YOUR_ACTUAL_GEMINI_API_KEY</code> with your valid key).
+            </li>
+            <li>After creating or modifying the <code className="bg-slate-600 px-1 rounded">.env</code> file, **restart your Vite development server**.</li>
+            <li>If deploying (e.g., to Netlify), ensure <code className="bg-slate-600 px-1 rounded">VITE_GEMINI_API_KEY</code> is set as an environment variable in your build/deployment settings.</li>
+          </ul>
+           <p className="text-slate-400 mt-3 text-xs">
+            The application checks for <code className="bg-slate-600 px-0.5 rounded">import.meta.env.VITE_GEMINI_API_KEY</code>. 
+            If this value is not found or <code className="bg-slate-600 px-0.5 rounded">import.meta.env</code> itself is not available (e.g., not running via Vite), this error will appear.
+            Check your browser's developer console for more specific error messages if the problem persists after setting the key.
+          </p>
         </div>
       </div>
     );
@@ -379,27 +415,77 @@ const App: React.FC = () => {
 
   return (
     <div className="flex flex-col md:flex-row min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-gray-900 text-slate-100 relative">
-      <aside className="w-full md:w-1/4 bg-slate-800/50 p-4 md:p-6 shadow-lg overflow-y-auto md:max-h-screen border-r border-slate-700">
-        <h2 className="text-2xl font-bold mb-3 text-sky-400 tracking-tight">Game Progression</h2>
-        <button
+      <aside 
+        className={`bg-slate-800/50 shadow-lg md:max-h-screen border-r border-slate-700 
+                    transition-all duration-300 ease-in-out overflow-y-hidden 
+                    w-full md:${isLeftSidebarCollapsed ? 'w-20 px-2 py-4' : 'w-1/4 p-4 md:p-6'}`}
+      >
+        <div className="flex flex-col h-full">
+          {/* Top Section: Logo + App Title */}
+          <div className={`flex items-center mb-4 ${isLeftSidebarCollapsed ? 'justify-center' : 'justify-start'}`}>
+            <img 
+              src="/favicon.png" 
+              alt="App Logo" 
+              className={`${isLeftSidebarCollapsed ? 'h-10 w-10' : 'h-12 w-12'} transition-all duration-300`} 
+            />
+            {!isLeftSidebarCollapsed && (
+              <h1 className="ml-3 text-xl font-bold text-sky-400 tracking-tight">
+                Noah's Nuzlocke Navigator
+              </h1>
+            )}
+          </div>
+
+          <button
             onClick={switchToNavigatorPanel}
-            className={`w-full text-left px-4 py-3 mb-4 rounded-lg transition-all duration-200 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-purple-500
-              ${activeMainPanel === 'navigator'
-                ? 'bg-purple-600 text-white shadow-lg ring-2 ring-purple-400'
-                : 'bg-slate-700 hover:bg-slate-600 text-slate-200 hover:text-white'
-              }
-            `}
+            title="Nuzlocke Navigator"
+            className={`w-full text-left py-3 mb-4 rounded-lg transition-all duration-200 ease-in-out 
+                        ${isLeftSidebarCollapsed ? 'px-0 flex justify-center items-center h-12 text-2xl' : 'px-4 transform hover:scale-105'} 
+                        focus:outline-none focus:ring-2 
+                        ${activeMainPanel === 'navigator'
+                          ? 'bg-purple-600 text-white shadow-lg ring-2 ring-purple-400'
+                          : 'bg-slate-700 hover:bg-slate-600 text-slate-200 hover:text-white focus:ring-purple-500'
+                        }
+                      `}
           >
-            <div className="flex items-center">
-              <span className={`mr-3 h-2.5 w-2.5 rounded-full ${activeMainPanel === 'navigator' ? 'bg-white' : 'bg-purple-400'}`}></span>
-              <span className="font-medium">Nuzlocke Navigator</span>
-            </div>
+            {isLeftSidebarCollapsed ? (
+              '🧭' 
+            ) : (
+              <div className="flex items-center">
+                <span className={`mr-3 h-2.5 w-2.5 rounded-full ${activeMainPanel === 'navigator' ? 'bg-white' : 'bg-purple-400'}`}></span>
+                <span className="font-medium">Nuzlocke Navigator</span>
+              </div>
+            )}
           </button>
-        <GameProgressionTree
-          locations={ULTRA_MOON_PROGRESSION}
-          selectedLocationId={selectedLocation?.id || null}
-          onSelectLocation={handleSelectLocation}
-        />
+          
+          {!isLeftSidebarCollapsed && (
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              <GameProgressionTree
+                locations={ULTRA_MOON_PROGRESSION}
+                selectedLocationId={selectedLocation?.id || null}
+                onSelectLocation={handleSelectLocation}
+              />
+            </div>
+          )}
+
+          <div className={`mt-auto pt-4 ${isLeftSidebarCollapsed ? 'flex justify-center' : 'flex justify-end'}`}>
+            <button
+              onClick={() => setIsLeftSidebarCollapsed(prev => !prev)}
+              className="p-2 rounded-md hover:bg-slate-600 text-slate-300 hover:text-sky-300 transition-colors focus:outline-none focus:ring-2 focus:ring-sky-500"
+              aria-label={isLeftSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              title={isLeftSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            >
+              {isLeftSidebarCollapsed ? (
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+                </svg> 
+              ) : (
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
+                </svg> 
+              )}
+            </button>
+          </div>
+        </div>
       </aside>
 
       <main className="flex-1 p-4 md:p-8 overflow-y-auto md:max-h-screen">
@@ -432,7 +518,7 @@ const App: React.FC = () => {
                     onPokemonNameClick={handleOpenPokemonDetail}
                   />
                 )}
-                 {!locationDetails && !isLoadingLocation && !locationError && !apiKeyMissing && (
+                 {!locationDetails && !isLoadingLocation && !locationError && (
                   <div className="text-center py-10 text-slate-400">
                     <p className="text-xl">Select a location to see details or waiting for data...</p>
                   </div>

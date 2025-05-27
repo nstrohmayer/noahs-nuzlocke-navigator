@@ -11,58 +11,73 @@ const FormattedOracleResponse: React.FC<{
 }> = ({ responseText, gameLocations, onPokemonNameClick, onLocationNameClick }) => {
   
   const processLine = (line: string): React.ReactNode[] => {
-    const regex = /({{([^{}]+?)}})|(\[\[([^\][]+?)\]\])|([^{[]+)/g;
     const parts: React.ReactNode[] = [];
-    let lastIndex = 0;
+    let remainingLine = line;
+    let keyCounter = 0;
 
-    line.replace(regex, (match, pkmFull, pkmName, locFull, locName, text, offset) => {
-      // Add preceding text if any
-      if (offset > lastIndex) {
-        parts.push(line.substring(lastIndex, offset));
+    while (remainingLine.length > 0) {
+      const pkmMatch = remainingLine.match(/{{([^{}]+?)}}/);
+      const locMatch = remainingLine.match(/\[\[([^\][]+?)\]\]/);
+      const boldMatch = remainingLine.match(/\*\*(.+?)\*\*/s); // Added 's' flag for multiline bold
+
+      let firstMatch: { type: 'pkm' | 'loc' | 'bold'; index: number; length: number; content: string; } | null = null;
+
+      if (pkmMatch && (firstMatch === null || pkmMatch.index! < firstMatch.index)) {
+        firstMatch = { type: 'pkm', index: pkmMatch.index!, length: pkmMatch[0].length, content: pkmMatch[1] };
       }
-      
-      if (pkmName) { // Pokemon {{PokemonName}}
-        parts.push(
-          <button 
-            key={`${pkmName}-${offset}`} 
-            onClick={() => onPokemonNameClick(pkmName)} 
-            className="text-sky-400 hover:text-sky-300 underline font-semibold focus:outline-none focus:ring-1 focus:ring-sky-500 rounded px-0.5 py-0 inline"
-            aria-label={`View details for ${pkmName}`}
-          >
-            {pkmName}
-          </button>
-        );
-      } else if (locName) { // Location [[LocationName]]
-        const foundLocation = gameLocations.find(l => l.name.toLowerCase() === locName.toLowerCase());
-        if (foundLocation) {
+      if (locMatch && (firstMatch === null || locMatch.index! < firstMatch.index)) {
+        firstMatch = { type: 'loc', index: locMatch.index!, length: locMatch[0].length, content: locMatch[1] };
+      }
+      if (boldMatch && (firstMatch === null || boldMatch.index! < firstMatch.index)) {
+        firstMatch = { type: 'bold', index: boldMatch.index!, length: boldMatch[0].length, content: boldMatch[1] };
+      }
+
+      if (firstMatch) {
+        // Add text before the match
+        if (firstMatch.index > 0) {
+          parts.push(remainingLine.substring(0, firstMatch.index));
+        }
+
+        // Add the matched, formatted element
+        const uniqueKey = `${firstMatch.type}-${keyCounter++}`;
+        if (firstMatch.type === 'pkm') {
           parts.push(
             <button 
-              key={`${locName}-${offset}`} 
-              onClick={() => onLocationNameClick(foundLocation)} 
-              className="text-emerald-400 hover:text-emerald-300 underline font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 rounded px-0.5 py-0 inline"
-              aria-label={`View details for ${locName}`}
+              key={uniqueKey} 
+              onClick={() => onPokemonNameClick(firstMatch.content)} 
+              className="text-sky-400 hover:text-sky-300 underline font-semibold focus:outline-none focus:ring-1 focus:ring-sky-500 rounded px-0.5 py-0 inline"
+              aria-label={`View details for ${firstMatch.content}`}
             >
-              {locName}
+              {firstMatch.content}
             </button>
           );
-        } else {
-          parts.push(locName); // Location not found in ULTRA_MOON_PROGRESSION, render as text
+        } else if (firstMatch.type === 'loc') {
+          const foundLocation = gameLocations.find(l => l.name.toLowerCase() === firstMatch.content.toLowerCase());
+          if (foundLocation) {
+            parts.push(
+              <button 
+                key={uniqueKey} 
+                onClick={() => onLocationNameClick(foundLocation)} 
+                className="text-emerald-400 hover:text-emerald-300 underline font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 rounded px-0.5 py-0 inline"
+                aria-label={`View details for ${firstMatch.content}`}
+              >
+                {firstMatch.content}
+              </button>
+            );
+          } else {
+            parts.push(firstMatch.content); // Location not found, render as text
+          }
+        } else if (firstMatch.type === 'bold') {
+          parts.push(<strong key={uniqueKey}>{firstMatch.content}</strong>);
         }
-      } else if (text) { // Plain text
-         // This case is handled by the substring logic primarily, 
-         // but regex includes it for capturing segments between {{}} and [[]]
-        parts.push(text);
+        remainingLine = remainingLine.substring(firstMatch.index + firstMatch.length);
+      } else {
+        // No more special patterns, add the rest of the line
+        parts.push(remainingLine);
+        remainingLine = "";
       }
-      lastIndex = offset + match.length;
-      return match; // Required for String.prototype.replace if not returning replacement string
-    });
-
-    // Add any remaining text after the last match
-    if (lastIndex < line.length) {
-      parts.push(line.substring(lastIndex));
     }
-    
-    return parts.length > 0 ? parts : [line]; // Fallback to line if regex yields no parts (e.g. empty line)
+    return parts;
   };
 
   const lines = responseText.split('\n');
@@ -73,19 +88,17 @@ const FormattedOracleResponse: React.FC<{
     const trimmedLine = line.trim();
     if (trimmedLine.startsWith('* ') || trimmedLine.startsWith('- ')) {
       const listItemContent = processLine(trimmedLine.substring(2));
-      currentListItems.push(<li key={`li-${index}`}>{listItemContent}</li>);
+      currentListItems.push(<li key={`li-${index}-${contentBlocks.length}`}>{listItemContent}</li>);
     } else {
       if (currentListItems.length > 0) {
         contentBlocks.push(<ul key={`ul-${contentBlocks.length}`} className="list-disc list-inside my-2 pl-4 space-y-1">{currentListItems}</ul>);
         currentListItems = [];
       }
       if (trimmedLine) {
-        contentBlocks.push(<p key={`p-${index}`} className="my-2 leading-relaxed">{processLine(line)}</p>);
+        contentBlocks.push(<p key={`p-${index}-${contentBlocks.length}`} className="my-2 leading-relaxed">{processLine(line)}</p>);
       } else if (index > 0 && lines[index-1].trim() !== "" && contentBlocks.length > 0) {
-        // Handle deliberate empty lines for paragraph spacing, if not already spaced by <p> margins
-        // This ensures that multiple newlines result in some visual separation.
-        if (contentBlocks[contentBlocks.length-1].type === 'p') { // Only add if previous was a paragraph.
-             contentBlocks.push(<div key={`spacer-${index}`} className="h-2"></div>); // Minimal spacer
+        if (contentBlocks[contentBlocks.length-1].type === 'p') {
+             contentBlocks.push(<div key={`spacer-${index}-${contentBlocks.length}`} className="h-2"></div>);
         }
       }
     }
