@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { MoveDetailDisplayProps } from '../types';
 
@@ -33,9 +34,9 @@ export const MoveDetailDisplay: React.FC<MoveDetailDisplayProps> = ({ moveData, 
         </div>
       </div>
       
-      <div className="flex flex-col md:flex-row gap-4 h-[calc(100%-3.5rem)]">
+      <div className="flex flex-col md:flex-row gap-4 md:h-[calc(100%-3.5rem)]"> {/* Adjusted height for md+ */}
         {/* Left Column: Move Information */}
-        <div className="w-full md:w-2/3 space-y-3 overflow-y-auto pr-2">
+        <div className="w-full md:w-2/3 space-y-3 md:overflow-y-auto md:pr-2"> {/* Added md: specific overflow and padding */}
             <div className="grid grid-cols-3 gap-2 text-center">
                 <div className="bg-slate-700/50 p-2 rounded-md">
                     <p className="text-xs text-slate-400">Power</p>
@@ -76,7 +77,7 @@ export const MoveDetailDisplay: React.FC<MoveDetailDisplayProps> = ({ moveData, 
         <div className="w-full md:w-1/3">
             <h3 className="font-semibold text-slate-200 mb-2 text-lg">Learned By:</h3>
             {moveData.learnedByPokemon && moveData.learnedByPokemon.length > 0 ? (
-            <ul className="space-y-1.5 bg-slate-700/30 p-3 rounded-md max-h-[calc(100%-2.5rem)] overflow-y-auto">
+            <ul className="space-y-1.5 bg-slate-700/30 p-3 rounded-md max-h-72 md:max-h-[calc(100%-2.5rem)] overflow-y-auto"> {/* Adjusted max-height */}
                 {moveData.learnedByPokemon.map(p => (
                 <li key={p.id || p.name} className="text-sm">
                     <button
