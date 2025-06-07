@@ -9,10 +9,11 @@ const CACHE_PREFIX_NAVIGATOR = "gemini_navigator_cache_"; // Cache for navigator
 
 const getGoogleGenAI = (): GoogleGenAI => {
   if (!ai) {
-    if (typeof import.meta.env === 'undefined' || !import.meta.env.VITE_GEMINI_API_KEY) {
-      throw new Error("VITE_GEMINI_API_KEY environment variable not set or import.meta.env is not available. Ensure the app is run/built with Vite and the key is set.");
+    const apiKey = process.env.API_KEY;
+    if (!apiKey) { // This will be true if API_KEY is an empty string (or null/undefined)
+      throw new Error("Gemini API Key (process.env.API_KEY) is not configured. This is typically set via the VITE_GEMINI_API_KEY environment variable during the build process. Please ensure it's correctly set in your .env file or deployment environment variables.");
     }
-    ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
+    ai = new GoogleGenAI({ apiKey: apiKey });
   }
   return ai;
 };
@@ -190,7 +191,7 @@ export const fetchLocationDetailsFromGemini = async (locationName: string): Prom
     if (error instanceof SyntaxError) {
         errorMessage = `The AI returned malformed data for ${locationName} that could not be parsed as JSON. (Details: ${error.message})`;
     } else if (error instanceof Error) {
-        errorMessage = error.message.startsWith("AI response") || error.message.startsWith("AI request") || error.message.startsWith("AI generation")
+        errorMessage = error.message.startsWith("AI response") || error.message.startsWith("AI request") || error.message.startsWith("AI generation") || error.message.startsWith("Gemini API Key")
             ? error.message
             : `Error fetching details for ${locationName} from AI: ${error.message}`;
     }
@@ -279,7 +280,7 @@ export const fetchNavigatorGuidanceFromGemini = async (userPrompt: string): Prom
     
     let errorMessage = `Failed to get guidance from AI.`;
     if (error instanceof Error) {
-         errorMessage = error.message.startsWith("AI response") || error.message.startsWith("Your query was blocked") || error.message.startsWith("AI generation")
+         errorMessage = error.message.startsWith("AI response") || error.message.startsWith("Your query was blocked") || error.message.startsWith("AI generation") || error.message.startsWith("Gemini API Key")
             ? error.message
             : `Error fetching guidance from AI: ${error.message}`;
     }

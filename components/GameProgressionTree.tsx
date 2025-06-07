@@ -6,13 +6,20 @@ interface GameProgressionTreeProps {
   locations: GameLocationNode[];
   selectedLocationId: string | null;
   onSelectLocation: (location: GameLocationNode) => void;
+  currentLocationId: string | null;
+  onSetCurrentLocation: (locationId: string) => void;
 }
 
-export const GameProgressionTree: React.FC<GameProgressionTreeProps> = ({ locations, selectedLocationId, onSelectLocation }) => {
+export const GameProgressionTree: React.FC<GameProgressionTreeProps> = ({ 
+  locations, 
+  selectedLocationId, 
+  onSelectLocation,
+  currentLocationId,
+  onSetCurrentLocation
+}) => {
   const islandFilters = useMemo(() => {
     const uniqueIslands = new Set(locations.map(loc => loc.island).filter(island => !!island));
     return Array.from(uniqueIslands).sort((a, b) => {
-      // Ensure a consistent, desired order (e.g., Melemele, Akala, Ula'ula, Poni first)
       const islandOrder = ["Melemele", "Akala", "Ula'ula", "Poni"];
       const indexA = islandOrder.indexOf(a!);
       const indexB = islandOrder.indexOf(b!);
@@ -30,25 +37,25 @@ export const GameProgressionTree: React.FC<GameProgressionTreeProps> = ({ locati
 
   useEffect(() => {
     if (islandFilters.length > 0) {
-      // If current filter is not valid or not set, set to the first available island
       if (!activeIslandFilter || !islandFilters.includes(activeIslandFilter)) {
         setActiveIslandFilter(islandFilters[0]);
       }
     } else {
-      // No islands available, so no filter can be active
       setActiveIslandFilter(null);
     }
-  }, [islandFilters, activeIslandFilter]); // Rerun if islandFilters change or if activeIslandFilter was programmatically changed
+  }, [islandFilters, activeIslandFilter]);
 
   const filteredLocations = useMemo(() => {
     if (!activeIslandFilter) {
-      // If no island filter is active (e.g., no islands available, or still initializing)
-      // Optionally, you could return all locations or the first island's locations by default here.
-      // For now, returning an empty array if no filter is active.
       return [];
     }
     return locations.filter(location => location.island === activeIslandFilter);
   }, [locations, activeIslandFilter]);
+
+  const handleStarClick = (e: React.MouseEvent, locationId: string) => {
+    e.stopPropagation(); // Prevent the location button click
+    onSetCurrentLocation(locationId);
+  };
 
   return (
     <>
@@ -87,10 +94,21 @@ export const GameProgressionTree: React.FC<GameProgressionTreeProps> = ({ locati
                 : 'bg-slate-700 hover:bg-slate-600 text-slate-200 hover:text-white'
               }
             `}
+            aria-current={selectedLocationId === location.id ? "page" : undefined}
           >
-            <div className="flex items-center">
-              <span className={`mr-3 h-2.5 w-2.5 rounded-full ${selectedLocationId === location.id ? 'bg-white' : 'bg-sky-400'}`}></span>
-              <span className="font-medium">{location.name}</span>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center">
+                <span className={`mr-3 h-2.5 w-2.5 rounded-full ${selectedLocationId === location.id ? 'bg-white' : 'bg-sky-400'}`}></span>
+                <span className="font-medium">{location.name}</span>
+              </div>
+              <button
+                onClick={(e) => handleStarClick(e, location.id)}
+                className={`p-1 rounded-full transition-colors text-lg ${currentLocationId === location.id ? 'text-yellow-400 hover:text-yellow-300' : 'text-slate-400 hover:text-yellow-400'}`}
+                aria-label={currentLocationId === location.id ? `Unmark ${location.name} as current` : `Mark ${location.name} as current`}
+                title={currentLocationId === location.id ? `Unmark as current` : `Mark as current`}
+              >
+                {currentLocationId === location.id ? '⭐' : '☆'}
+              </button>
             </div>
           </button>
         ))}

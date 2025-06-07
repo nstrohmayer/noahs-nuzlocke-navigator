@@ -1,4 +1,3 @@
-
 export interface GameLocationNode {
   id: string;
   name: string;
@@ -39,6 +38,9 @@ export interface LocationDetailsDisplayProps {
   IconItem: React.ElementType;
   IconBattle: React.ElementType;
   onPokemonNameClick: (pokemonName: string) => void;
+  currentLocationId: string | null; // ID of the currently starred location
+  onSetCurrentLocation: (locationNodeId: string) => void; // Function to set a location as current
+  selectedLocationNodeId: string; // ID of the location whose details are being displayed
 }
 
 export interface DetailedLocationInfo {

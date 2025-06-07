@@ -88,3 +88,5 @@ export const ULTRA_MOON_PROGRESSION: GameLocationNode[] = [
 ];
 
 export const GEMINI_MODEL_NAME = 'gemini-2.5-flash-preview-04-17';
+export const CURRENT_LOCATION_STORAGE_KEY = 'nuzlocke-current-location-id';
+export const DEFAULT_CURRENT_LOCATION_ID = 'route-2-melemele';
